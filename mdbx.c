@@ -19717,7 +19717,14 @@ __cold int dxb_setup(MDBX_env *env, const int lck_rc, const mdbx_mode_t mode_bit
                header.geometry.lower, header.geometry.now, header.geometry.upper, pv2pages(header.geometry.shrink_pv),
                pv2pages(header.geometry.grow_pv), next_txnid);
 
-        ENSURE(env, header.unsafe_txnid == recent.txnid);
+        if (unlikely(header.unsafe_txnid != recent.txnid))
+        {
+          const pgno_t recent_pgno = bytes2pgno(env, ptr_dist(recent.ptr_c, env->dxb_mmap.base));
+          ERROR("meta[%u] recent steady txnid %" PRIaTXN " != header txnid %" PRIaTXN
+                ", manual recovery needed",
+                recent_pgno, recent.txnid, header.unsafe_txnid);
+          return MDBX_CORRUPTED;
+        }
         meta_set_txnid(env, &header, next_txnid);
         err = dxb_sync_locked(env, env->flags | txn_shrink_allowed, &header, &troika);
         if (err) {
@@ -29826,7 +29833,7 @@ int osal_check_fs_local(mdbx_filehandle_t handle, int flags) {
 #endif /* ST/MNT_LOCAL */
 
 #ifdef ST_EXPORTED
-  if ((st_flags & ST_EXPORTED) != 0 && !(flags & (MDBX_RDONLY | MDBX_EXCLUSIVE))))
+  if ((st_flags & ST_EXPORTED) != 0 && !(flags & (MDBX_RDONLY | MDBX_EXCLUSIVE)))
     return MDBX_RESULT_TRUE;
 #elif defined(MNT_EXPORTED)
   if ((mnt_flags & MNT_EXPORTED) != 0 && !(flags & (MDBX_RDONLY | MDBX_EXCLUSIVE)))
@@ -31030,10 +31037,12 @@ __cold static bin128_t osal_bootid(void) {
           case KSTAT_DATA_UINT32:
             bootid_collect(&uuid, &kn->value, sizeof(int32_t));
             got_boottime = true;
+            break;
           case KSTAT_DATA_INT64:
           case KSTAT_DATA_UINT64:
             bootid_collect(&uuid, &kn->value, sizeof(int64_t));
             got_boottime = true;
+            break;
           }
         }
       }
@@ -38012,7 +38021,7 @@ static int nested_undo(MDBX_txn *nested) {
 
   nested->flags = MDBX_TXN_FINISHED;
   MDBX_env *const env = nested->env;
-  if (unlikely(parent->geo.upper != nested->geo.upper || parent->geo.now != nested->geo.upper) &&
+  if (unlikely(parent->geo.upper != nested->geo.upper || parent->geo.now != nested->geo.now) &&
       !(parent->flags & MDBX_TXN_ERROR) && !(env->flags & ENV_FATAL_ERROR)) {
     /* undo resize performed by nested txn */
     int err = dxb_resize(env, parent->geo.first_unallocated, parent->geo.now, parent->geo.upper, impilict_shrink);
